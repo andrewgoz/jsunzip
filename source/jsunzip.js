@@ -33,25 +33,25 @@ var tinf;
 
 function JSUnzip() {
     "use strict";
-    this.getInt = function(offset, size) {
+    var data;
+    var files;
+    var comment;
+    function getInt(offset, size) {
         switch (size) {
         case 4:
-            return  this.data[offset + 3] << 24 | 
-                    this.data[offset + 2] << 16 | 
-                    this.data[offset + 1] << 8 | 
-                    this.data[offset + 0];
-            break;
+            return data[offset + 3] << 24 | 
+                   data[offset + 2] << 16 | 
+                   data[offset + 1] << 8 | 
+                   data[offset + 0];
         case 2:
-            return  this.data[offset + 1] << 8 | 
-                    this.data[offset + 0];
-            break;
+            return data[offset + 1] << 8 | 
+                   data[offset + 0];
         default:
-            return this.data[offset];
-            break;
+            return data[offset];
         }
-    };
+    }
 
-    this.getDOSDate = function(dosdate, dostime) {
+    function getDOSDate(dosdate, dostime) {
         var day = dosdate & 0x1f;
         var month = ((dosdate >>> 5) & 0xf) - 1;
         var year = 1980 + ((dosdate >>> 9) & 0x7f);
@@ -59,90 +59,112 @@ function JSUnzip() {
         var minute = (dostime >>> 5) & 0x3f;
         var hour = (dostime >>> 11) & 0x1f;
         return new Date(year, month, day, hour, minute, second);
-    };
+    }
 
-    this.stringOf = function(array) {
-      var str = "";
-      for (var i = 0; i < array.length; ++i) {
-          str += String.fromCharCode(array[i]);
-      }
-      return str;
-    };
+    function stringOf(array) {
+        var str = '';
+        for (var i = 0; i < array.length; ++i) {
+            str += String.fromCharCode(array[i]);
+        }
+        return str;
+    }
 
-    this.open = function(data) {
+    var crc32 = (function() {
+        let table = new Uint32Array(256);
+        for (let i = 256; i--;) {
+            let t = i;
+            for (let k = 8; k--;) {
+                t = t & 1 ? 3988292384 ^ t >>> 1 : t >>> 1;
+            }
+            table[i] = t;
+        }
+        return function(data) {
+            let crc = -1;
+            for (let i = 0, l = data.length; i < l; i++) {
+                crc = crc >>> 8 ^ table[crc & 255 ^ data[i]];
+            }
+            return (crc ^ -1) >>> 0;
+        };
+    })();
+
+    function open(_data) {
         var i;
         // Convert data to a Uint8Array only if it's a string.  For the fastest decode,
         // supply a Uint8Array already. On most browsers this can be achieved in XHR with:
         // request.responseType = "arraybuffer";
-        // and then passing the "request.response" object here (NOT request.responseTest).
-        if (typeof(data) == "string") {
-          this.data = new Uint8Array(data.length);
-          for (i = 0; i < data.length; ++i) this.data[i] = data.charCodeAt(i) & 0xff;
+        // and then passing the "request.response" object here (NOT request.responseText).
+        if (typeof(_data) == "string") {
+            data = new Uint8Array(_data.length);
+            for (i = 0; i < _data.length; ++i) data[i] = _data.charCodeAt(i) & 0xff;
         } else {
-          this.data = data;
+            data = _data;
         }
-        this.files = [];
+        files = [];
 
-        if (this.data.length < 22)
+        if (data.length < 22)
             return { 'status' : false, 'error' : 'Invalid data' };
-        var endOfCentralDirectory = this.data.length - 22;
-        while (endOfCentralDirectory >= 0 && this.getInt(endOfCentralDirectory, 4) != 0x06054b50)
+        var endOfCentralDirectory = data.length - 22;
+        while (endOfCentralDirectory >= 0 && getInt(endOfCentralDirectory, 4) != 0x06054b50)
             --endOfCentralDirectory;
         if (endOfCentralDirectory < 0)
             return { 'status' : false, 'error' : 'Invalid data' };
-        if (this.getInt(endOfCentralDirectory + 4, 2) !== 0 || this.getInt(endOfCentralDirectory + 6, 2) !== 0)
+        if (getInt(endOfCentralDirectory + 4, 2) !== 0 || getInt(endOfCentralDirectory + 6, 2) !== 0)
             return { 'status' : false, 'error' : 'No multidisk support' };
 
-        var entriesInThisDisk = this.getInt(endOfCentralDirectory + 8, 2);
-        var centralDirectoryOffset = this.getInt(endOfCentralDirectory + 16, 4);
-        var globalCommentLength = this.getInt(endOfCentralDirectory + 20, 2);
-        this.comment = this.stringOf(this.data.subarray(endOfCentralDirectory + 22, endOfCentralDirectory + 22 + globalCommentLength));
+        var entriesInThisDisk = getInt(endOfCentralDirectory + 8, 2);
+        var centralDirectoryOffset = getInt(endOfCentralDirectory + 16, 4);
+        var globalCommentLength = getInt(endOfCentralDirectory + 20, 2);
+        comment = stringOf(data.subarray(endOfCentralDirectory + 22, endOfCentralDirectory + 22 + globalCommentLength));
 
         var fileOffset = centralDirectoryOffset;
 
         for (i = 0; i < entriesInThisDisk; ++i) {
-            if (this.getInt(fileOffset + 0, 4) != 0x02014b50)
+            if (getInt(fileOffset + 0, 4) != 0x02014b50)
                 return { 'status' : false, 'error' : 'Invalid data' };
-            if (this.getInt(fileOffset + 6, 2) > 20)
+            if (getInt(fileOffset + 6, 2) > 20)
                 return { 'status' : false, 'error' : 'Unsupported version' };
-            if (this.getInt(fileOffset + 8, 2) & 1)
+            if (getInt(fileOffset + 8, 2) & 1)
                 return { 'status' : false, 'error' : 'Encryption not implemented' };
 
-            var compressionMethod = this.getInt(fileOffset + 10, 2);
+            var compressionMethod = getInt(fileOffset + 10, 2);
             if (compressionMethod !== 0 && compressionMethod !== 8)
                 return { 'status' : false, 'error' : 'Unsupported compression method' };
 
-            var lastModFileTime = this.getInt(fileOffset + 12, 2);
-            var lastModFileDate = this.getInt(fileOffset + 14, 2);
-            var lastModifiedDate = this.getDOSDate(lastModFileDate, lastModFileTime);
+            var lastModFileTime = getInt(fileOffset + 12, 2);
+            var lastModFileDate = getInt(fileOffset + 14, 2);
+            var lastModifiedDate = getDOSDate(lastModFileDate, lastModFileTime);
 
-            var crc = this.getInt(fileOffset + 16, 4);
-            // TODO: crc
+            var crc = getInt(fileOffset + 16, 4) >>> 0;
 
-            var compressedSize = this.getInt(fileOffset + 20, 4);
-            var uncompressedSize = this.getInt(fileOffset + 24, 4);
+            var compressedSize = getInt(fileOffset + 20, 4);
+            var uncompressedSize = getInt(fileOffset + 24, 4);
 
-            var fileNameLength = this.getInt(fileOffset + 28, 2);
-            var extraFieldLength = this.getInt(fileOffset + 30, 2);
-            var fileCommentLength = this.getInt(fileOffset + 32, 2);
+            var fileNameLength = getInt(fileOffset + 28, 2);
+            var extraFieldLength = getInt(fileOffset + 30, 2);
+            var fileCommentLength = getInt(fileOffset + 32, 2);
 
-            var relativeOffsetOfLocalHeader = this.getInt(fileOffset + 42, 4);
+            var relativeOffsetOfLocalHeader = getInt(fileOffset + 42, 4);
 
-            var fileName = this.stringOf(this.data.subarray(fileOffset + 46, fileOffset + 46 + fileNameLength));
-            var fileComment = this.stringOf(this.data.subarray(fileOffset + 46 + fileNameLength + extraFieldLength, fileOffset + 46 + fileNameLength + extraFieldLength + fileCommentLength));
+            var fileName = stringOf(data.subarray(
+                fileOffset + 46,
+                fileOffset + 46 + fileNameLength));
+            var fileComment = stringOf(data.subarray(
+                fileOffset + 46 + fileNameLength + extraFieldLength,
+                fileOffset + 46 + fileNameLength + extraFieldLength + fileCommentLength));
 
-            if (this.getInt(relativeOffsetOfLocalHeader + 0, 4) != 0x04034b50)
+            if (getInt(relativeOffsetOfLocalHeader + 0, 4) != 0x04034b50)
                 return { 'status' : false, 'error' : 'Invalid data' };
-            var localFileNameLength = this.getInt(relativeOffsetOfLocalHeader + 26, 2);
-            var localExtraFieldLength = this.getInt(relativeOffsetOfLocalHeader + 28, 2);
+            var localFileNameLength = getInt(relativeOffsetOfLocalHeader + 26, 2);
+            var localExtraFieldLength = getInt(relativeOffsetOfLocalHeader + 28, 2);
             var localFileContent = relativeOffsetOfLocalHeader + 30 + localFileNameLength + localExtraFieldLength;
 
-            this.files[fileName] = 
+            files[fileName] = 
             {
-                'fileComment' : fileComment,
-                'compressionMethod' : compressionMethod,
-                'compressedSize' : compressedSize,
+                'fileComment'      : fileComment,
+                'compressionMethod': compressionMethod,
+                'compressedSize'   : compressedSize,
                 'uncompressedSize' : uncompressedSize,
+                'crc'              : crc,
                 'localFileContent' : localFileContent,
                 'lastModifiedDate' : lastModifiedDate
             };
@@ -150,36 +172,47 @@ function JSUnzip() {
             fileOffset += 46 + fileNameLength + extraFieldLength + fileCommentLength;
         }
         return { 'status' : true };
-    };     
+    }
     
     // Reads the data and returns a Uint8Array of the results. This is the fastest method.
     // To read the data as a string, use read()
-    this.readBinary = function(fileName) {
-        var fileInfo = this.files[fileName];
+    function readBinary(fileName) {
+        var result, fileInfo = files[fileName];
         if (fileInfo) {
             if (fileInfo.compressionMethod == 8) {
                 if (!tinf) {
-                    tinf = new TINF();
-                    tinf.init();
+                    tinf = TINF();
                 }
-                var result = tinf.uncompress(this.data, fileInfo.localFileContent, fileInfo.uncompressedSize);
-                if (result.status == tinf.OK)
-                    return { 'status' : true, 'data' : result.data };
-                else
-                    return { 'status' : false, 'error' : result.error };
+                result = tinf.uncompress(data, fileInfo.localFileContent, fileInfo.uncompressedSize);
             } else {
-                return { 'status' : true, 'data' : this.data.subarray(fileInfo.localFileContent, fileInfo.localFileContent + fileInfo.uncompressedSize) };
+                result = { status: tinf.OK, data: data.subarray(fileInfo.localFileContent, fileInfo.localFileContent + fileInfo.uncompressedSize) };
             }
+            if ((result.status == tinf.OK) && (fileInfo.crc != crc32(result.data))) {
+                result.status = tinf.DATA_ERROR;
+                result.error = 'CRC mismatch';
+            }
+            if (result.status == tinf.OK)
+                return { 'status' : true, 'data' : result.data };
+            else
+                return { 'status' : false, 'error' : result.error };
         }
         return { 'status' : false, 'error' : "File '" + fileName + "' doesn't exist in zip" };
-    };
+    }
 
-    this.read = function(fileName) {
-      var result = this.readBinary(fileName);
-      if (result.data) {
-          result.data = this.stringOf(result.data);
-      }
-      return result;
+    function read(fileName) {
+        var result = readBinary(fileName);
+        if (result.data) {
+            result.data = stringOf(result.data);
+        }
+        return result;
+    }
+    return {
+        files:()=>files,
+        comment:()=>comment,
+        stringOf:stringOf,
+        open:open,
+        readBinary:readBinary,
+        read:read
     };
 }
 
@@ -224,51 +257,62 @@ function JSUnzip() {
  */
 
 function TINF() {
+"use strict";
 
-this.OK = 0;
-this.DATA_ERROR = (-3);
+const OK = 0;
+const DATA_ERROR = (-3);
 
 /* ------------------------------ *
  * -- internal data structures -- *
  * ------------------------------ */
 
-this.TREE = function() {
-   this.table = new Array(16);  /* table of code length counts */
-   this.trans = new Array(288); /* code -> symbol translation table */
-};
+function TREE() {
+    var table = new Array(16);  /* table of code length counts */
+    var trans = new Array(288); /* code -> symbol translation table */
+    return {t:table,x:trans};
+}
 
-this.DATA = function(that) {
-   this.source = '';
-   this.sourceIndex = 0;
-   this.tag = 0;
-   this.bitcount = 0;
+function DATA() {
+    var source = '';
+    var sourceIndex = 0;
+    var tag = 0;
+    var bitcount = 0;
 
-   this.dest = [];
+    var dest = [];
 
-   this.ltree = new that.TREE(); /* dynamic length/symbol tree */
-   this.dtree = new that.TREE(); /* dynamic distance tree */
-};
+    var ltree = TREE(); /* dynamic length/symbol tree */
+    var dtree = TREE(); /* dynamic distance tree */
+    return {
+        s :source,
+        si:sourceIndex,
+        t :tag,
+        bc:bitcount,
+        d :dest,
+        lt:ltree,
+        dt:dtree
+    };
+}
 
 /* --------------------------------------------------- *
  * -- uninitialized global data (static structures) -- *
  * --------------------------------------------------- */
 
-this.sltree = new this.TREE(); /* fixed length/symbol tree */
-this.sdtree = new this.TREE(); /* fixed distance tree */
+var sltree = TREE(); /* fixed length/symbol tree */
+var sdtree = TREE(); /* fixed distance tree */
 
 /* extra bits and base tables for length codes */
-this.length_bits = new Array(30);
-this.length_base = new Array(30);
+var length_bits = new Array(30);
+var length_base = new Array(30);
 
 /* extra bits and base tables for distance codes */
-this.dist_bits = new Array(30);
-this.dist_base = new Array(30);
+var dist_bits = new Array(30);
+var dist_base = new Array(30);
 
 /* special ordering of code length codes */
-this.clcidx = [
-   16, 17, 18, 0, 8, 7, 9, 6,
-   10, 5, 11, 4, 12, 3, 13, 2,
-   14, 1, 15
+var clcidx = [
+    16, 17, 18, 0, 8, 7, 9, 6,
+    10, 5, 11, 4, 12, 3, 13, 2,
+    14, 1, 15
 ];
 
 /* ----------------------- *
@@ -276,377 +320,342 @@ this.clcidx = [
  * ----------------------- */
 
 /* build extra bits and base tables */
-this.build_bits_base = function(bits, base, delta, first)
+function build_bits_base(bits, base, delta, first)
 {
-   var i, sum;
+    var i, sum;
 
-   /* build bits table */
-   for (i = 0; i < delta; ++i) bits[i] = 0;
-   for (i = 0; i < 30 - delta; ++i) bits[i + delta] = Math.floor(i / delta);
+    /* build bits table */
+    for (i = 0; i < delta; ++i) bits[i] = 0;
+    for (i = 0; i < 30 - delta; ++i) bits[i + delta] = Math.floor(i / delta);
 
-   /* build base table */
-   for (sum = first, i = 0; i < 30; ++i)
-   {
-      base[i] = sum;
-      sum += 1 << bits[i];
-   }
-};
+    /* build base table */
+    for (sum = first, i = 0; i < 30; ++i)
+    {
+        base[i] = sum;
+        sum += 1 << bits[i];
+    }
+}
 
 /* build the fixed huffman trees */
-this.build_fixed_trees = function(lt, dt)
+function build_fixed_trees(lt, dt)
 {
-   var i;
+    var i;
 
-   /* build fixed length tree */
-   for (i = 0; i < 7; ++i) lt.table[i] = 0;
+    /* build fixed length tree */
+    for (i = 0; i < 7; ++i) lt.t[i] = 0;
 
-   lt.table[7] = 24;
-   lt.table[8] = 152;
-   lt.table[9] = 112;
+    lt.t[7] = 24;
+    lt.t[8] = 152;
+    lt.t[9] = 112;
 
-   for (i = 0; i < 24; ++i) lt.trans[i] = 256 + i;
-   for (i = 0; i < 144; ++i) lt.trans[24 + i] = i;
-   for (i = 0; i < 8; ++i) lt.trans[24 + 144 + i] = 280 + i;
-   for (i = 0; i < 112; ++i) lt.trans[24 + 144 + 8 + i] = 144 + i;
+    for (i = 0; i < 24; ++i) lt.x[i] = 256 + i;
+    for (i = 0; i < 144; ++i) lt.x[24 + i] = i;
+    for (i = 0; i < 8; ++i) lt.x[24 + 144 + i] = 280 + i;
+    for (i = 0; i < 112; ++i) lt.x[24 + 144 + 8 + i] = 144 + i;
 
-   /* build fixed distance tree */
-   for (i = 0; i < 5; ++i) dt.table[i] = 0;
+    /* build fixed distance tree */
+    for (i = 0; i < 5; ++i) dt.t[i] = 0;
 
-   dt.table[5] = 32;
+    dt.t[5] = 32;
 
-   for (i = 0; i < 32; ++i) dt.trans[i] = i;
-};
+    for (i = 0; i < 32; ++i) dt.x[i] = i;
+}
 
 /* given an array of code lengths, build a tree */
-this.build_tree = function(t, lengths, loffset, num)
+function build_tree(t, lengths, loffset, num)
 {
-   var offs = new Array(16);
-   var i, sum;
+    var offs = new Array(16);
+    var i, sum;
 
-   /* clear code length count table */
-   for (i = 0; i < 16; ++i) t.table[i] = 0;
+    /* clear code length count table */
+    for (i = 0; i < 16; ++i) t.t[i] = 0;
 
-   /* scan symbol lengths, and sum code length counts */
-   for (i = 0; i < num; ++i) t.table[lengths[loffset + i]]++;
+    /* scan symbol lengths, and sum code length counts */
+    for (i = 0; i < num; ++i) t.t[lengths[loffset + i]]++;
 
-   t.table[0] = 0;
+    t.t[0] = 0;
 
-   /* compute offset table for distribution sort */
-   for (sum = 0, i = 0; i < 16; ++i)
-   {
-      offs[i] = sum;
-      sum += t.table[i];
-   }
+    /* compute offset table for distribution sort */
+    for (sum = 0, i = 0; i < 16; ++i)
+    {
+        offs[i] = sum;
+        sum += t.t[i];
+    }
 
-   /* create code->symbol translation table (symbols sorted by code) */
-   for (i = 0; i < num; ++i)
-   {
-      if (lengths[loffset + i]) t.trans[offs[lengths[loffset + i]]++] = i;
-   }
-};
+    /* create code->symbol translation table (symbols sorted by code) */
+    for (i = 0; i < num; ++i)
+    {
+        if (lengths[loffset + i]) t.x[offs[lengths[loffset + i]]++] = i;
+    }
+}
 
 /* ---------------------- *
  * -- decode functions -- *
  * ---------------------- */
 
-/* get one bit from source stream */
-this.getbit = function(d)
+/* read a num bit value from a stream */
+function read_bits(d, num)
 {
-   var bit;
-
-   /* check if tag is empty */
-   if (!(d.bitcount--))
-   {
-      /* load next tag */
-      d.tag = d.source[d.sourceIndex++];
-      d.bitcount = 7;
-   }
-
-   /* shift bit out of tag */
-   bit = d.tag & 0x01;
-   d.tag >>>= 1;
-
-   return bit;
-};
-
-/* read a num bit value from a stream and add base */
-this.read_bits = function(d, num, base)
-{
-    if (!num)
-        return base;
-
     var val = 0;
-    while (d.bitcount < 24) {
-        d.tag = d.tag | d.source[d.sourceIndex++] << d.bitcount;
-        d.bitcount += 8;
+    if (num) {
+        while (d.bc < num) {
+            d.t = d.t | d.s[d.si++] << d.bc;
+            d.bc += 8;
+        }
+        val = d.t & (0xffff >>> (16 - num));
+        d.t >>>= num;
+        d.bc -= num;
     }
-    val = d.tag & (0xffff >>> (16 - num));
-    d.tag >>>= num;
-    d.bitcount -= num;
-    return val + base;
-};
+    return val;
+}
 
 /* given a data stream and a tree, decode a symbol */
-this.decode_symbol = function(d, t)
+function decode_symbol(d, t)
 {
-    while (d.bitcount < 24) {
-        d.tag = d.tag | d.source[d.sourceIndex++] << d.bitcount;
-        d.bitcount += 8;
+    while (d.bc < 24) {
+        d.t = d.t | d.s[d.si++] << d.bc;
+        d.bc += 8;
     }
     
     var sum = 0, cur = 0, len = 0;
     do {
-        cur = 2 * cur + ((d.tag & (1 << len)) >>> len);
+        cur = 2 * cur + ((d.t & (1 << len)) >>> len);
 
         ++len;
 
-        sum += t.table[len];
-        cur -= t.table[len];
+        sum += t.t[len];
+        cur -= t.t[len];
 
     } while (cur >= 0);
 
-    d.tag >>>= len;
-    d.bitcount -= len;
+    d.t >>>= len;
+    d.bc -= len;
 
-    return t.trans[sum + cur];
-};
+    return t.x[sum + cur];
+}
 
 /* given a data stream, decode dynamic trees from it */
-this.decode_trees = function(d, lt, dt)
+function decode_trees(d, lt, dt)
 {
-   var code_tree = new this.TREE();
-   lengths = new Array(288+32);
-   var hlit, hdist, hclen;
-   var i, num, length;
+    var code_tree = TREE();
+    var lengths = new Array(288 + 32);
+    var hlit, hdist, hclen;
+    var i, num, length;
 
-   /* get 5 bits HLIT (257-286) */
-   hlit = this.read_bits(d, 5, 257);
+    /* get 5 bits HLIT (257-286) */
+    hlit = read_bits(d, 5) + 257;
 
-   /* get 5 bits HDIST (1-32) */
-   hdist = this.read_bits(d, 5, 1);
+    /* get 5 bits HDIST (1-32) */
+    hdist = read_bits(d, 5) + 1;
 
-   /* get 4 bits HCLEN (4-19) */
-   hclen = this.read_bits(d, 4, 4);
+    /* get 4 bits HCLEN (4-19) */
+    hclen = read_bits(d, 4) + 4;
 
-   for (i = 0; i < 19; ++i) lengths[i] = 0;
+    for (i = 0; i < 19; ++i) lengths[i] = 0;
 
-   /* read code lengths for code length alphabet */
-   for (i = 0; i < hclen; ++i)
-   {
-      /* get 3 bits code length (0-7) */
-      var clen = this.read_bits(d, 3, 0);
+    /* read code lengths for code length alphabet */
+    for (i = 0; i < hclen; ++i)
+    {
+        /* get 3 bits code length (0-7) */
+        lengths[clcidx[i]] = read_bits(d, 3);
+    }
 
-      lengths[this.clcidx[i]] = clen;
-   }
+    /* build code length tree */
+    build_tree(code_tree, lengths, 0, 19);
 
-   /* build code length tree */
-   this.build_tree(code_tree, lengths, 0, 19);
+    /* decode code lengths for the dynamic trees */
+    for (num = 0; num < hlit + hdist; )
+    {
+        var sym = decode_symbol(d, code_tree);
+        switch (sym)
+        {
+        case 16:
+            /* copy previous code length 3-6 times (read 2 bits) */
+            sym = lengths[num - 1];
+            length = read_bits(d, 2) + 3;
+            break;
+        case 17:
+            /* repeat code length 0 for 3-10 times (read 3 bits) */
+            sym = 0;
+            length = read_bits(d, 3) + 3;
+            break;
+        case 18:
+            /* repeat code length 0 for 11-138 times (read 7 bits) */
+            sym = 0;
+            length = read_bits(d, 7) + 11;
+            break;
+        default:
+            /* values 0-15 represent the actual code lengths */
+            length = 1;
+            break;
+        }
+        while (length--)
+        {
+           lengths[num++] = sym;
+        }
+    }
 
-   /* decode code lengths for the dynamic trees */
-   for (num = 0; num < hlit + hdist; )
-   {
-      var sym = this.decode_symbol(d, code_tree);
-
-      switch (sym)
-      {
-      case 16:
-         /* copy previous code length 3-6 times (read 2 bits) */
-         {
-            var prev = lengths[num - 1];
-            for (length = this.read_bits(d, 2, 3); length; --length)
-            {
-               lengths[num++] = prev;
-            }
-         }
-         break;
-      case 17:
-         /* repeat code length 0 for 3-10 times (read 3 bits) */
-         for (length = this.read_bits(d, 3, 3); length; --length)
-         {
-            lengths[num++] = 0;
-         }
-         break;
-      case 18:
-         /* repeat code length 0 for 11-138 times (read 7 bits) */
-         for (length = this.read_bits(d, 7, 11); length; --length)
-         {
-            lengths[num++] = 0;
-         }
-         break;
-      default:
-         /* values 0-15 represent the actual code lengths */
-         lengths[num++] = sym;
-         break;
-      }
-   }
-
-   /* build dynamic trees */
-   this.build_tree(lt, lengths, 0, hlit);
-   this.build_tree(dt, lengths, hlit, hdist);
-};
+    /* build dynamic trees */
+    build_tree(lt, lengths, 0, hlit);
+    build_tree(dt, lengths, hlit, hdist);
+}
 
 /* ----------------------------- *
  * -- block inflate functions -- *
  * ----------------------------- */
 
 /* given a stream and two trees, inflate a block of data */
-this.inflate_block_data = function(d, lt, dt)
+function inflate_block_data(d, lt, dt)
 {
-   // js optimization.
-   var ddest = d.dest;
-   var ddestlength = d.destIndex;
+    // js optimization.
+    var ddest = d.d;
+    var ddestlength = d.di;
 
-   while (1)
-   {
-      var sym = this.decode_symbol(d, lt);
+    for (;;)
+    {
+        var sym = decode_symbol(d, lt);
 
-      /* check for end of block */
-      if (sym == 256)
-      {
-         d.destIndex = ddestlength;
-         return this.OK;
-      }
+        /* check for end of block */
+        if (sym == 256)
+        {
+           d.di = ddestlength;
+           return OK;
+        }
 
-      if (sym < 256)
-      {
-         ddest[ddestlength++] = sym;
-      } else {
+        if (sym < 256)
+        {
+            ddest[ddestlength++] = sym;
+        } else {
 
-         var length, dist, offs;
-         var i;
+            var length, dist, offs;
+            var i;
 
-         sym -= 257;
+            sym -= 257;
 
-         /* possibly get more bits from length code */
-         length = this.read_bits(d, this.length_bits[sym], this.length_base[sym]);
+            /* possibly get more bits from length code */
+            length = read_bits(d, length_bits[sym]) + length_base[sym];
 
-         dist = this.decode_symbol(d, dt);
+            dist = decode_symbol(d, dt);
 
-         /* possibly get more bits from distance code */
-         offs = ddestlength - this.read_bits(d, this.dist_bits[dist], this.dist_base[dist]);
+            /* possibly get more bits from distance code */
+            offs = ddestlength - (read_bits(d, dist_bits[dist]) + dist_base[dist]);
 
-         /* copy match */
-         for (i = offs; i < offs + length; ++i) {
-            ddest[ddestlength++] = ddest[i];
-         }
-      }
-   }
-};
-
-/* inflate an uncompressed block of data */
-this.inflate_uncompressed_block = function(d)
-{
-   var length, invlength;
-   var i;
-
-   /* get length */
-   length = d.source[d.sourceIndex+1];
-   length = 256*length + d.source[d.sourceIndex];
-
-   /* get one's complement of length */
-   invlength = d.source[d.sourceIndex+3];
-   invlength = 256*invlength + d.source[d.sourceIndex+2];
-
-   /* check length */
-   if (length != (~invlength & 0x0000ffff)) return this.DATA_ERROR;
-
-   d.sourceIndex += 4;
-
-   /* copy block */
-   for (i = length; i; --i)
-       d.dest[d.destIndex] = d.source[d.sourceIndex++];
-
-   /* make sure we start next block on a byte boundary */
-   d.bitcount = 0;
-
-   return this.OK;
-};
-
-/* inflate a block of data compressed with fixed huffman trees */
-this.inflate_fixed_block = function(d)
-{
-   /* decode block using fixed trees */
-   return this.inflate_block_data(d, this.sltree, this.sdtree);
+            /* copy match */
+            for (i = offs; i < offs + length; ++i) {
+                ddest[ddestlength++] = ddest[i];
+            }
+        }
+    }
 }
 
-/* inflate a block of data compressed with dynamic huffman trees */
-this.inflate_dynamic_block = function(d)
+/* inflate an uncompressed block of data */
+function inflate_uncompressed_block(d)
 {
-   /* decode trees from stream */
-   this.decode_trees(d, d.ltree, d.dtree);
+    var length, invlength;
+    var i;
 
-   /* decode block using decoded trees */
-   return this.inflate_block_data(d, d.ltree, d.dtree);
-};
+    /* get length */
+    length = d.s[d.si+1];
+    length = 256 * length + d.s[d.si];
+
+    /* get one's complement of length */
+    invlength = d.s[d.si + 3];
+    invlength = 256 * invlength + d.s[d.si + 2];
+
+    /* check length */
+    if (length != (~invlength & 0x0000ffff)) return DATA_ERROR;
+
+    d.si += 4;
+
+    /* copy block */
+    for (i = length; i; --i)
+        d.d[d.di] = d.s[d.si++];
+
+    /* make sure we start next block on a byte boundary */
+    d.bc = 0;
+
+    return OK;
+}
 
 /* ---------------------- *
  * -- public functions -- *
  * ---------------------- */
 
 /* initialize global (static) data */
-this.init = function()
+function init()
 {
-   /* build fixed huffman trees */
-   this.build_fixed_trees(this.sltree, this.sdtree);
+    /* build fixed huffman trees */
+    build_fixed_trees(sltree, sdtree);
 
-   /* build extra bits and base tables */
-   this.build_bits_base(this.length_bits, this.length_base, 4, 3);
-   this.build_bits_base(this.dist_bits, this.dist_base, 2, 1);
+    /* build extra bits and base tables */
+    build_bits_base(length_bits, length_base, 4, 3);
+    build_bits_base(dist_bits, dist_base, 2, 1);
 
-   /* fix a special case */
-   this.length_bits[28] = 0;
-   this.length_base[28] = 258;
-};
+    /* fix a special case */
+    length_bits[28] = 0;
+    length_base[28] = 258;
+}
 
 /* inflate stream from source to dest */
-this.uncompress = function(source, offset, uncompressedSize)
+function uncompress(source, offset, uncompressedSize)
 {
-   var d = new this.DATA(this);
-   var bfinal;
+    var d = DATA();
+    var bfinal;
 
-   /* initialise data */
-   d.source = source;
-   d.sourceIndex = offset;
-   d.bitcount = 0;
+    /* initialise data */
+    d.s = source;
+    d.si = offset;
+    d.bc = 0;
 
-   d.dest = new Uint8Array(uncompressedSize);
-   d.destIndex = 0;
+    d.d = new Uint8Array(uncompressedSize);
+    d.di = 0;
 
-   do {
+    do {
 
-      var btype;
-      var res;
+        var btype;
+        var res;
 
-      /* read final block flag */
-      bfinal = this.getbit(d);
+        /* read final block flag */
+        bfinal = read_bits(d, 1);
 
-      /* read block type (2 bits) */
-      btype = this.read_bits(d, 2, 0);
+        /* read block type (2 bits) */
+        btype = read_bits(d, 2);
 
-      /* decompress block */
-      switch (btype)
-      {
-      case 0:
-         /* decompress uncompressed block */
-         res = this.inflate_uncompressed_block(d);
-         break;
-      case 1:
-         /* decompress block with fixed huffman trees */
-         res = this.inflate_fixed_block(d);
-         break;
-      case 2:
-         /* decompress block with dynamic huffman trees */
-         res = this.inflate_dynamic_block(d);
-         break;
-      default:
-         return { 'status' : this.DATA_ERROR };
-      }
+        /* decompress block */
+        switch (btype)
+        {
+        case 0:
+            /* decompress uncompressed block */
+            res = inflate_uncompressed_block(d);
+            break;
+        case 1:
+            /* decompress block with fixed huffman trees */
+            /* decode block using fixed trees */
+            res = inflate_block_data(d, sltree, sdtree);
+            break;
+        case 2:
+            /* decompress block with dynamic huffman trees */
+            /* decode trees from stream */
+            decode_trees(d, d.lt, d.dt);
+            /* decode block using decoded trees */
+            res = inflate_block_data(d, d.lt, d.dt);
+            break;
+        default:
+            res = DATA_ERROR;
+        }
 
-      if (res != this.OK) return { 'status' : this.DATA_ERROR };
+        if (res != OK) return { status: res };
 
-   } while (!bfinal);
+    } while (!bfinal);
 
-   return { 'status' : this.OK, 'data' : d.dest };
+    return { status: OK, data: d.d };
+}
+
+init();
+return {
+    OK:OK,
+    DATA_ERROR:DATA_ERROR,
+    uncompress:uncompress
 };
 
 }
