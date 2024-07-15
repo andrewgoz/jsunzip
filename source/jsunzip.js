@@ -272,27 +272,6 @@ function TREE() {
     return {t:table,x:trans};
 }
 
-function DATA() {
-    var source = '';
-    var sourceIndex = 0;
-    var tag = 0;
-    var bitcount = 0;
-
-    var dest = [];
-
-    var ltree = TREE(); /* dynamic length/symbol tree */
-    var dtree = TREE(); /* dynamic distance tree */
-    return {
-        s :source,
-        si:sourceIndex,
-        t :tag,
-        bc:bitcount,
-        d :dest,
-        lt:ltree,
-        dt:dtree
-    };
-}
-
 /* --------------------------------------------------- *
  * -- uninitialized global data (static structures) -- *
  * --------------------------------------------------- */
@@ -599,16 +578,17 @@ function init()
 /* inflate stream from source to dest */
 function uncompress(source, offset, uncompressedSize)
 {
-    var d = DATA();
+    var d = {
+        s:source,   /* source */
+        si:offset,  /* sourceIndex */
+        t:0,        /* tag */
+        bc:0,       /* bitcount */
+        d:new Uint8Array(uncompressedSize), /* dest */
+        di:0,       /* destIndex */
+        lt: TREE(), /* ltree - dynamic length/symbol tree */
+        dt: TREE()  /* dtree - dynamic distance tree */
+    };
     var bfinal;
-
-    /* initialise data */
-    d.s = source;
-    d.si = offset;
-    d.bc = 0;
-
-    d.d = new Uint8Array(uncompressedSize);
-    d.di = 0;
 
     do {
 
